@@ -1,7 +1,10 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -35,19 +38,48 @@ func ListFiles(rootPath string) ([]string, error) {
 	return paths, nil
 }
 
+func HashFile(filePath string) (string, error) {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+
+	hasher := sha256.New()
+	if _, err = io.Copy(hasher, file); err != nil {
+		return "", err
+	}
+
+	result := hasher.Sum(nil)
+	hexString := hex.EncodeToString(result)
+
+	return hexString, nil
+}
+
 func main() {
 	if len(os.Args) < 2 {
 		fmt.Fprintln(os.Stderr, "usage: go run main.go <directory>")
 		os.Exit(1)
 	}
 
-	files, err := ListFiles(os.Args[1])
+	rootPath := os.Args[1]
+
+	files, err := ListFiles(rootPath)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 
 	for _, file := range files {
-		fmt.Println(file)
+		fullPath := filepath.Join(rootPath, file)
+
+		hash, err := HashFile(fullPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: failed to hash %q: %v\n", file, err)
+
+			continue
+		}
+
+		fmt.Printf("%s: %s\n", file, hash)
 	}
 }
