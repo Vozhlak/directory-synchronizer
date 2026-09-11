@@ -18,6 +18,11 @@ type FileHash struct {
 	Hash string
 }
 
+type scanResult struct {
+	m   map[string]string
+	err error
+}
+
 func ListFiles(rootPath string) ([]string, error) {
 	paths := make([]string, 0)
 
@@ -64,19 +69,14 @@ func HashFile(filePath string) (string, error) {
 	return hexString, nil
 }
 
-func main() {
-	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: go run main.go <directory>")
-		os.Exit(1)
-	}
-
-	rootPath := os.Args[1]
-
+func ScanDir(rootPath string) (map[string]string, error) {
 	files, err := ListFiles(rootPath)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+
+	pathAndHashes := make(map[string]string)
 
 	tasks := make(chan string, len(files))
 	results := make(chan FileHash, len(files))
@@ -119,6 +119,89 @@ func main() {
 	}()
 
 	for fh := range results {
-		fmt.Printf("%s: %s\n", fh.Path, fh.Hash)
+		relPath, err := filepath.Rel(rootPath, fh.Path)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: failed to get relative path: %v\n", err)
+			continue
+		}
+
+		pathAndHashes[relPath] = fh.Hash
+	}
+
+	return pathAndHashes, nil
+}
+
+func CompareScans(source, dest map[string]string) (toCopy, toUpdate, toDelete []string) {
+	toCopy = make([]string, 0, len(source))
+	toUpdate = make([]string, 0, len(source))
+	toDelete = make([]string, 0, len(source))
+
+	for path, srcHash := range source {
+		if destHash, exists := dest[path]; !exists {
+			toCopy = append(toCopy, path)
+		} else if srcHash != destHash {
+			toUpdate = append(toUpdate, path)
+		}
+	}
+
+	for destPath := range dest {
+		if _, exists := source[destPath]; !exists {
+			toDelete = append(toDelete, destPath)
+		}
+	}
+
+	return toCopy, toUpdate, toDelete
+}
+
+func main() {
+	if len(os.Args) < 3 {
+		fmt.Fprintln(os.Stderr, "usage: go run main.go <source> <dest>")
+		os.Exit(1)
+	}
+
+	sourcePath := os.Args[1]
+	destPath := os.Args[2]
+
+	srcCh := make(chan scanResult, 1)
+	dstCh := make(chan scanResult, 1)
+
+	go func() {
+		m, err := ScanDir(sourcePath)
+		srcCh <- scanResult{m, err}
+	}()
+
+	go func() {
+		m, err := ScanDir(destPath)
+		dstCh <- scanResult{m, err}
+	}()
+
+	sourceMap := <-srcCh
+	destMap := <-dstCh
+
+	if sourceMap.err != nil {
+		fmt.Fprintf(os.Stderr, "error scanning source: %v\n", sourceMap.err)
+		os.Exit(1)
+	}
+
+	if destMap.err != nil {
+		fmt.Fprintf(os.Stderr, "error scanning dest: %v\n", destMap.err)
+		os.Exit(1)
+	}
+
+	toCopy, toUpdate, toDelete := CompareScans(sourceMap.m, destMap.m)
+
+	fmt.Println("Файлы для КОПИРОВАНИЯ:")
+	for _, toCopyItem := range toCopy {
+		fmt.Printf("- %s\n", toCopyItem)
+	}
+
+	fmt.Println("Файлы для ОБНОВЛЕНИЯ:")
+	for _, toUpdateItem := range toUpdate {
+		fmt.Printf("- %s\n", toUpdateItem)
+	}
+
+	fmt.Println("Файлы для УДАЛЕНИЯ:")
+	for _, toDeleteItem := range toDelete {
+		fmt.Printf("- %s\n", toDeleteItem)
 	}
 }
