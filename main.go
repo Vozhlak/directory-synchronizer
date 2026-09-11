@@ -8,7 +8,15 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sync"
 )
+
+const NumWorkers = 10
+
+type FileHash struct {
+	Path string
+	Hash string
+}
 
 func ListFiles(rootPath string) ([]string, error) {
 	paths := make([]string, 0)
@@ -70,16 +78,47 @@ func main() {
 		os.Exit(1)
 	}
 
+	tasks := make(chan string, len(files))
+	results := make(chan FileHash, len(files))
+
+	wg := sync.WaitGroup{}
+
+	wg.Add(NumWorkers)
+	for i := 0; i < NumWorkers; i++ {
+
+		go func() {
+			defer wg.Done()
+
+			for path := range tasks {
+				hash, err := HashFile(path)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "warning: failed to hash %q: %v\n", path, err)
+
+					continue
+				}
+
+				results <- FileHash{
+					Path: path,
+					Hash: hash,
+				}
+			}
+		}()
+	}
+
 	for _, file := range files {
 		fullPath := filepath.Join(rootPath, file)
 
-		hash, err := HashFile(fullPath)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "warning: failed to hash %q: %v\n", file, err)
+		tasks <- fullPath
+	}
 
-			continue
-		}
+	close(tasks)
 
-		fmt.Printf("%s: %s\n", file, hash)
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	for fh := range results {
+		fmt.Printf("%s: %s\n", fh.Path, fh.Hash)
 	}
 }
