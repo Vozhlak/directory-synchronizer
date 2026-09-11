@@ -9,6 +9,9 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+
+	"github.com/fatih/color"
+	"github.com/schollz/progressbar/v3"
 )
 
 const NumWorkers = 10
@@ -221,13 +224,22 @@ func main() {
 
 	toCopy, toUpdate, toDelete := CompareScans(sourceMap.m, destMap.m)
 
-	for _, file := range toCopy {
-		fmt.Printf("[INFO] Копирую %s...\n", file)
+	total := len(toCopy) + len(toUpdate) + len(toDelete)
 
+	bar := progressbar.NewOptions(total,
+		progressbar.OptionSetDescription("Синхронизация..."),
+		progressbar.OptionSetWidth(40),
+		progressbar.OptionShowCount(),
+	)
+
+	for _, file := range toCopy {
 		srcPath := filepath.Join(sourcePath, file)
 		dstPath := filepath.Join(destPath, file)
 
-		if err := CopyFile(srcPath, dstPath); err != nil {
+		err := CopyFile(srcPath, dstPath)
+		bar.Add(1)
+
+		if err != nil {
 			fmt.Fprintf(os.Stderr, "[ERROR] failed to copy %s: %v\n", file, err)
 			continue
 		}
@@ -236,12 +248,13 @@ func main() {
 	}
 
 	for _, file := range toUpdate {
-		fmt.Printf("[INFO] Обновляю %s...\n", file)
-
 		srcPath := filepath.Join(sourcePath, file)
 		dstPath := filepath.Join(destPath, file)
 
-		if err := CopyFile(srcPath, dstPath); err != nil {
+		err := CopyFile(srcPath, dstPath)
+		bar.Add(1)
+
+		if err != nil {
 			fmt.Fprintf(os.Stderr, "[ERROR] failed to copy %s: %v\n", file, err)
 			continue
 		}
@@ -250,16 +263,28 @@ func main() {
 	}
 
 	for _, file := range toDelete {
-		fmt.Printf("[INFO] Удаляю %s...\n", file)
-
 		dstPath := filepath.Join(destPath, file)
 
-		if err := DeleteFile(dstPath); err != nil {
+		err := DeleteFile(dstPath)
+		bar.Add(1)
+
+		if err != nil {
 			fmt.Fprintf(os.Stderr, "[ERROR] failed to delete %s: %v\n", file, err)
 			continue
 		}
 
 		deleted++
+	}
+
+	fmt.Println()
+	for _, file := range toCopy {
+		color.New(color.FgGreen).Printf("[КОПИРОВАНИЕ] %s\n", file)
+	}
+	for _, file := range toUpdate {
+		color.New(color.FgYellow).Printf("[ОБНОВЛЕНИЕ] %s\n", file)
+	}
+	for _, file := range toDelete {
+		color.New(color.FgRed).Printf("[УДАЛЕНИЕ] %s\n", file)
 	}
 
 	fmt.Println("\nСинхронизация завершена!")
